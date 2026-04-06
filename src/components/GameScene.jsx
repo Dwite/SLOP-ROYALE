@@ -7,6 +7,9 @@ import { HexArena } from '../levels/HexArena'
 import { GameCamera } from './GameCamera'
 import { Lighting } from './Lighting'
 import { PickupItems } from '../systems/PickupItems'
+import { WeaponItems } from '../systems/WeaponItems'
+import { WeaponEffects } from '../systems/WeaponEffects'
+import { WeaponPhysics } from '../systems/WeaponPhysics'
 import { GameLoop } from '../systems/GameLoop'
 
 export function GameScene() {
@@ -37,6 +40,9 @@ export function GameScene() {
       )}
 
       <PickupItems />
+      <WeaponItems />
+      <WeaponEffects />
+      <WeaponPhysics />
       <GameLoop />
     </>
   )

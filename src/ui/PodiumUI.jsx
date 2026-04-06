@@ -9,6 +9,7 @@ export function PodiumUI() {
   const matchTime = useGameStore(s => s.matchTime)
   const pushCount = useGameStore(s => s.pushCount)
   const tilesCrackedByPlayer = useGameStore(s => s.tilesCrackedByPlayer)
+  const weaponUseCount = useGameStore(s => s.weaponUseCount)
   const playerAlive = useGameStore(s => s.playerAlive)
 
   const winner = slops.find(s => s.alive)
@@ -103,6 +104,12 @@ export function PodiumUI() {
             <div style={{ color: '#555', fontSize: '0.7rem', letterSpacing: '1px' }}>CRACKED</div>
             <div style={{ color: '#ff4488', fontSize: '1.2rem', fontWeight: 700 }}>
               {tilesCrackedByPlayer}
+            </div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ color: '#555', fontSize: '0.7rem', letterSpacing: '1px' }}>WEAPONS</div>
+            <div style={{ color: '#88ccff', fontSize: '1.2rem', fontWeight: 700 }}>
+              {weaponUseCount}
             </div>
           </div>
         </div>
