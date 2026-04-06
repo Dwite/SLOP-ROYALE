@@ -9,14 +9,20 @@ export function BotSlop({ bot }) {
   const meshRef = useRef()
   const eliminateSlop = useGameStore(s => s.eliminateSlop)
   const updateSlopPosition = useGameStore(s => s.updateSlopPosition)
+  const useBotWeapon = useGameStore(s => s.useBotWeapon)
   const tiles = useGameStore(s => s.tiles)
   const phase = useGameStore(s => s.phase)
+
+  const bounceTimerRef = useRef(0)
+  const bounceIntensityRef = useRef(0)
+  const knockbackTimerRef = useRef(0)
 
   const behavior = useMemo(() => ({
     wanderAngle: Math.random() * Math.PI * 2,
     changeTimer: 0,
     changeInterval: 1 + Math.random() * 3,
     jumpChance: 0.015,
+    weaponUseTimer: 2 + Math.random() * 5, // random delay before using weapon
   }), [])
 
   useFrame((_, delta) => {
@@ -76,10 +82,15 @@ export function BotSlop({ bot }) {
     const moveX = Math.cos(behavior.wanderAngle) * speed
     const moveZ = Math.sin(behavior.wanderAngle) * speed
 
+    // Reduce control during knockback
+    knockbackTimerRef.current = Math.max(0, knockbackTimerRef.current - delta)
+    const knockbackFade = knockbackTimerRef.current > 0 ? knockbackTimerRef.current / 0.4 : 0
+    const lerpFactor = THREE.MathUtils.lerp(0.1, 0.015, knockbackFade)
+
     body.setLinvel({
-      x: THREE.MathUtils.lerp(vel.x, moveX, 0.1),
+      x: THREE.MathUtils.lerp(vel.x, moveX, lerpFactor),
       y: vel.y,
-      z: THREE.MathUtils.lerp(vel.z, moveZ, 0.1),
+      z: THREE.MathUtils.lerp(vel.z, moveZ, lerpFactor),
     }, true)
 
     // Random jump
@@ -87,11 +98,47 @@ export function BotSlop({ bot }) {
       body.setLinvel({ x: vel.x, y: 9, z: vel.z }, true)
     }
 
-    // Wobble animation
+    // Bot weapon use AI
+    if (bot.weapon) {
+      behavior.weaponUseTimer -= delta
+      if (behavior.weaponUseTimer <= 0) {
+        const facingX = Math.cos(behavior.wanderAngle)
+        const facingZ = Math.sin(behavior.wanderAngle)
+        useBotWeapon(bot.id, [pos.x, pos.y, pos.z], [facingX, facingZ])
+        behavior.weaponUseTimer = 2 + Math.random() * 5
+      }
+    }
+
+    // Consume weapon impulses aimed at this bot
+    const pending = useGameStore.getState().pendingWeaponImpulses
+    if (pending && pending.length > 0) {
+      const myImpulses = pending.filter(i => i.slopId === bot.id)
+      if (myImpulses.length > 0) {
+        for (const imp of myImpulses) {
+          body.applyImpulse({ x: imp.x, y: imp.y, z: imp.z }, true)
+        }
+        const remaining = pending.filter(i => i.slopId !== bot.id)
+        useGameStore.setState({ pendingWeaponImpulses: remaining })
+      }
+    }
+
+    // Collision bounce decay
+    let bounceMult = 1
+    if (bounceTimerRef.current > 0) {
+      bounceTimerRef.current -= delta
+      const t = bounceTimerRef.current
+      const intensity = bounceIntensityRef.current
+      bounceMult = 1 + Math.sin(t * 18) * intensity * Math.exp(-t * 4) * 0.5
+      if (bounceTimerRef.current <= 0) bounceMult = 1
+    }
+
+    // Wobble + bounce animation
     if (meshRef.current) {
       const s = bot.scale || 0.5
       const wobble = Math.sin(Date.now() * (bot.appearance?.wobbleSpeed || 4) + bot.id.charCodeAt(4) * 100) * (bot.appearance?.wobbleAmount || 0.03)
-      meshRef.current.scale.set(s + wobble, s - wobble, s + wobble)
+      const scaleY = (s - wobble) * bounceMult
+      const scaleXZ = (s + wobble) / Math.sqrt(Math.max(0.5, bounceMult))
+      meshRef.current.scale.set(scaleXZ, scaleY, scaleXZ)
     }
   })
 
@@ -111,7 +158,37 @@ export function BotSlop({ bot }) {
       lockRotations
       name={bot.id}
     >
-      <BallCollider args={[scale]} restitution={0.6} friction={0.8} />
+      <BallCollider args={[scale]} restitution={0.9} friction={0.5}
+        onCollisionEnter={(e) => {
+          const other = e.other?.rigidBodyObject?.name
+          if (!other) return
+          if (other !== 'player' && !other.startsWith('bot-')) return
+
+          // Funny bounce
+          bounceIntensityRef.current = 0.5 + Math.random() * 0.5
+          bounceTimerRef.current = 0.8
+          knockbackTimerRef.current = 0.4
+
+          // Strong repulsion impulse away from the other slop
+          if (bodyRef.current) {
+            const myPos = bodyRef.current.translation()
+            const otherBody = e.other?.rigidBody
+            if (otherBody) {
+              const otherPos = otherBody.translation()
+              let dx = myPos.x - otherPos.x
+              let dz = myPos.z - otherPos.z
+              const dist = Math.sqrt(dx * dx + dz * dz) || 0.1
+              dx /= dist
+              dz /= dist
+              const pushForce = 7 + Math.random() * 4
+              bodyRef.current.applyImpulse(
+                { x: dx * pushForce, y: 3 + Math.random() * 3, z: dz * pushForce },
+                true
+              )
+            }
+          }
+        }}
+      />
       <mesh ref={meshRef} castShadow>
         <sphereGeometry args={[1, 24, 24]} />
         <meshStandardMaterial

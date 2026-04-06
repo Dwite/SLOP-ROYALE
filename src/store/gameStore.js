@@ -15,6 +15,17 @@ const PICKUPS = [
   { id: 'magnet', emoji: '🧲', name: 'Magnet', desc: 'Pull nearby slop toward you', duration: 3, color: '#ff44aa' },
 ]
 
+const WEAPONS = [
+  { id: 'banana', emoji: '🍌', name: 'Banana Peel', desc: 'Drop behind — slops slide wildly', color: '#ffe135', type: 'drop' },
+  { id: 'snowball', emoji: '❄️', name: 'Snowball', desc: 'Throw forward — freezes on hit', color: '#aaeeff', type: 'projectile' },
+  { id: 'chicken', emoji: '🐔', name: 'Rubber Chicken', desc: 'Bonk nearby slop skyward', color: '#ffcc44', type: 'melee' },
+  { id: 'goo', emoji: '💚', name: 'Goo Bomb', desc: 'Creates sticky slow zone', color: '#44ff66', type: 'projectile' },
+  { id: 'tornado', emoji: '🌪️', name: 'Tornado', desc: 'Pushes everything in its path', color: '#88ccff', type: 'projectile' },
+  { id: 'lightning', emoji: '⚡', name: 'Lightning Rod', desc: 'Zaps closest slop — stun!', color: '#ffff44', type: 'instant' },
+  { id: 'spring', emoji: '🔧', name: 'Spring Mine', desc: 'Place trap — launches walkers', color: '#ff8844', type: 'drop' },
+  { id: 'fart', emoji: '💨', name: 'Mega Fart', desc: 'AoE knockback all nearby', color: '#99ff66', type: 'instant' },
+]
+
 const SLOP_SIZES = {
   small: { mass: 0.5, speed: 12, scale: 0.4, pushResist: 0.3, label: 'Small — Fast & light' },
   medium: { mass: 1, speed: 8, scale: 0.5, pushResist: 0.6, label: 'Medium — Balanced' },
@@ -102,6 +113,13 @@ export const useGameStore = create((set, get) => ({
   // Pickups on the field
   activePickups: [],
 
+  // Weapons
+  playerWeapon: null, // current weapon the player holds
+  activeWeaponCrates: [], // weapon crates on the field
+  activeWeaponEffects: [], // active projectiles, zones, traps on the field
+  pendingWeaponImpulses: [], // impulses from weapon hits to be consumed by slop physics
+  weaponUseCount: 0, // stat tracking
+
   // Camera
   cameraMode: 'follow', // follow | voter | falling | podium
   spectatorTarget: null,
@@ -152,6 +170,7 @@ export const useGameStore = create((set, get) => ({
         heavy: false,
         shield: false,
         speedBoost: 0,
+        weapon: null,
         appearance: generateSlopAppearance(),
       }
     })
@@ -197,6 +216,11 @@ export const useGameStore = create((set, get) => ({
       tilesCracked: 0,
       tilesNeededToCrack: Math.floor(arenaConfig.tiles * 0.6),
       activePickups: [],
+      playerWeapon: null,
+      activeWeaponCrates: [],
+      activeWeaponEffects: [],
+      pendingWeaponImpulses: [],
+      weaponUseCount: 0,
       cameraMode: 'follow',
       fallProgress: 0,
       announcement: { text: arenaConfig.name, sub: arenaConfig.desc, time: 3 },
@@ -330,6 +354,9 @@ export const useGameStore = create((set, get) => ({
       cameraMode: state.playerAlive ? 'follow' : 'voter',
       fallProgress: 0,
       activePickups: [],
+      playerWeapon: null,
+      activeWeaponCrates: [],
+      activeWeaponEffects: [],
       announcement: { text: `ARENA ${nextIdx + 1}`, sub: arenaConfig.name + ' — ' + arenaConfig.desc, time: 3 },
     })
   },
@@ -466,9 +493,246 @@ export const useGameStore = create((set, get) => ({
     })
   },
 
+  // === WEAPON ACTIONS ===
+
+  spawnWeaponCrate: () => {
+    const state = get()
+    const solidTiles = state.tiles.filter(t => t.state === 'solid')
+    if (solidTiles.length === 0 || state.activeWeaponCrates.length >= 2) return
+
+    const tile = solidTiles[Math.floor(Math.random() * solidTiles.length)]
+    const weapon = WEAPONS[Math.floor(Math.random() * WEAPONS.length)]
+
+    set({
+      activeWeaponCrates: [...state.activeWeaponCrates, {
+        ...weapon,
+        tileId: tile.id,
+        x: tile.x,
+        z: tile.z,
+        spawnTime: Date.now(),
+      }],
+    })
+  },
+
+  collectWeaponCrate: (crateIndex, slopId) => {
+    const state = get()
+    const crate = state.activeWeaponCrates[crateIndex]
+    if (!crate) return
+
+    const updates = {
+      activeWeaponCrates: state.activeWeaponCrates.filter((_, i) => i !== crateIndex),
+    }
+
+    if (slopId === 'player') {
+      updates.playerWeapon = crate.id
+    }
+
+    // Update bot weapon in slops array
+    if (slopId !== 'player') {
+      updates.slops = state.slops.map(s =>
+        s.id === slopId ? { ...s, weapon: crate.id } : s
+      )
+    }
+
+    set(updates)
+  },
+
+  usePlayerWeapon: (playerPos, facingDir) => {
+    const state = get()
+    if (!state.playerWeapon) return null
+
+    const weaponDef = WEAPONS.find(w => w.id === state.playerWeapon)
+    if (!weaponDef) return null
+
+    const weaponId = state.playerWeapon
+    const effectId = `effect-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+    const effect = {
+      effectId,
+      weaponId,
+      color: weaponDef.color,
+      type: weaponDef.type,
+      ownerId: 'player',
+      x: playerPos[0],
+      y: playerPos[1],
+      z: playerPos[2],
+      dirX: facingDir[0],
+      dirZ: facingDir[1],
+      spawnTime: Date.now(),
+      lifetime: 0,
+    }
+
+    // Weapon-specific properties
+    if (weaponId === 'banana') {
+      // Drop behind player
+      effect.x -= facingDir[0] * 1.5
+      effect.z -= facingDir[1] * 1.5
+      effect.maxLifetime = 8
+      effect.radius = 1.2
+    } else if (weaponId === 'snowball') {
+      effect.speed = 20
+      effect.maxLifetime = 2
+      effect.radius = 0.8
+    } else if (weaponId === 'chicken') {
+      effect.maxLifetime = 0.3
+      effect.radius = 2.5
+    } else if (weaponId === 'goo') {
+      effect.speed = 15
+      effect.maxLifetime = 6
+      effect.radius = 2.0
+      effect.landed = false
+    } else if (weaponId === 'tornado') {
+      effect.speed = 12
+      effect.maxLifetime = 3
+      effect.radius = 2.0
+    } else if (weaponId === 'lightning') {
+      // Find closest slop
+      const aliveSlops = state.slops.filter(s => s.alive && s.id !== 'player')
+      let closest = null
+      let closestDist = Infinity
+      for (const s of aliveSlops) {
+        const dx = s.position[0] - playerPos[0]
+        const dz = s.position[2] - playerPos[2]
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist < closestDist && dist < 8) {
+          closestDist = dist
+          closest = s
+        }
+      }
+      if (closest) {
+        effect.targetId = closest.id
+        effect.targetX = closest.position[0]
+        effect.targetZ = closest.position[2]
+      }
+      effect.maxLifetime = 0.5
+      effect.radius = 1.0
+    } else if (weaponId === 'spring') {
+      effect.maxLifetime = 10
+      effect.radius = 1.0
+      effect.triggered = false
+    } else if (weaponId === 'fart') {
+      effect.maxLifetime = 0.6
+      effect.radius = 4.0
+    }
+
+    set({
+      playerWeapon: null,
+      weaponUseCount: state.weaponUseCount + 1,
+      activeWeaponEffects: [...state.activeWeaponEffects, effect],
+    })
+
+    return effect
+  },
+
+  useBotWeapon: (botId, botPos, facingDir) => {
+    const state = get()
+    const bot = state.slops.find(s => s.id === botId)
+    if (!bot || !bot.weapon) return
+
+    const weaponDef = WEAPONS.find(w => w.id === bot.weapon)
+    if (!weaponDef) return
+
+    const weaponId = bot.weapon
+    const effectId = `effect-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+    const effect = {
+      effectId,
+      weaponId,
+      color: weaponDef.color,
+      type: weaponDef.type,
+      ownerId: botId,
+      x: botPos[0],
+      y: botPos[1] || 0.5,
+      z: botPos[2],
+      dirX: facingDir[0],
+      dirZ: facingDir[1],
+      spawnTime: Date.now(),
+      lifetime: 0,
+    }
+
+    if (weaponId === 'banana') {
+      effect.x -= facingDir[0] * 1.5
+      effect.z -= facingDir[1] * 1.5
+      effect.maxLifetime = 8
+      effect.radius = 1.2
+    } else if (weaponId === 'snowball') {
+      effect.speed = 20
+      effect.maxLifetime = 2
+      effect.radius = 0.8
+    } else if (weaponId === 'chicken') {
+      effect.maxLifetime = 0.3
+      effect.radius = 2.5
+    } else if (weaponId === 'goo') {
+      effect.speed = 15
+      effect.maxLifetime = 6
+      effect.radius = 2.0
+      effect.landed = false
+    } else if (weaponId === 'tornado') {
+      effect.speed = 12
+      effect.maxLifetime = 3
+      effect.radius = 2.0
+    } else if (weaponId === 'lightning') {
+      const aliveSlops = state.slops.filter(s => s.alive && s.id !== botId)
+      let closest = null
+      let closestDist = Infinity
+      for (const s of aliveSlops) {
+        const dx = s.position[0] - botPos[0]
+        const dz = s.position[2] - botPos[2]
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist < closestDist && dist < 8) {
+          closestDist = dist
+          closest = s
+        }
+      }
+      if (closest) {
+        effect.targetId = closest.id
+        effect.targetX = closest.position[0]
+        effect.targetZ = closest.position[2]
+      }
+      effect.maxLifetime = 0.5
+      effect.radius = 1.0
+    } else if (weaponId === 'spring') {
+      effect.maxLifetime = 10
+      effect.radius = 1.0
+      effect.triggered = false
+    } else if (weaponId === 'fart') {
+      effect.maxLifetime = 0.6
+      effect.radius = 4.0
+    }
+
+    set({
+      slops: state.slops.map(s => s.id === botId ? { ...s, weapon: null } : s),
+      activeWeaponEffects: [...state.activeWeaponEffects, effect],
+    })
+  },
+
+  updateWeaponEffects: (dt) => {
+    const state = get()
+    if (state.activeWeaponEffects.length === 0) return
+
+    // Only track lifetimes — Rapier handles projectile movement
+    const updated = []
+    for (const effect of state.activeWeaponEffects) {
+      const e = { ...effect, lifetime: effect.lifetime + dt }
+      if (e.lifetime < e.maxLifetime) {
+        updated.push(e)
+      }
+    }
+
+    set({ activeWeaponEffects: updated })
+  },
+
+  removeWeaponEffect: (effectId) => {
+    const state = get()
+    set({
+      activeWeaponEffects: state.activeWeaponEffects.filter(e => e.effectId !== effectId),
+    })
+  },
+
   returnToMenu: () => set({ phase: 'menu' }),
 
   getArenaConfig: () => ARENA_CONFIGS[get().currentArena],
   getSlopSizes: () => SLOP_SIZES,
   getPickups: () => PICKUPS,
+  getWeapons: () => WEAPONS,
 }))

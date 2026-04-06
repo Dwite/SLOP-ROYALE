@@ -14,6 +14,8 @@ export function HUD() {
   const playerPickup = useGameStore(s => s.playerPickup)
   const playerPickupTimer = useGameStore(s => s.playerPickupTimer)
   const playerSpeedBoost = useGameStore(s => s.playerSpeedBoost)
+  const playerWeapon = useGameStore(s => s.playerWeapon)
+  const weapons = useGameStore(s => s.getWeapons())
 
   const aliveCount = slops.filter(s => s.alive).length
   const totalCount = slops.length
@@ -117,6 +119,37 @@ export function HUD() {
           </div>
         </div>
       </div>
+
+      {/* Weapon indicator */}
+      {playerWeapon && (() => {
+        const w = weapons.find(wp => wp.id === playerWeapon)
+        return w ? (
+          <div style={{
+            position: 'absolute',
+            bottom: 120,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: `rgba(0,0,0,0.8)`,
+            borderRadius: 12,
+            padding: '8px 16px',
+            border: `2px solid ${w.color}`,
+            boxShadow: `0 0 15px ${w.color}44, inset 0 0 10px ${w.color}22`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <span style={{ fontSize: '1.4rem' }}>{w.emoji}</span>
+            <div>
+              <div style={{ color: w.color, fontSize: '0.85rem', fontWeight: 700 }}>
+                {w.name}
+              </div>
+              <div style={{ color: '#888', fontSize: '0.65rem' }}>
+                Press Q to use
+              </div>
+            </div>
+          </div>
+        ) : null
+      })()}
 
       {/* Active pickup indicator */}
       {playerPickup && (

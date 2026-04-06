@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import { useGameStore } from '../store/gameStore'
 
 const PICKUP_SPAWN_INTERVAL = 8
+const WEAPON_SPAWN_INTERVAL = 12
 const FALL_DURATION = 3
 const GRACE_PERIOD = 8 // seconds before tiles start cracking
 const BASE_CRACK_INTERVAL = 4 // seconds between auto-cracks (no dead bots)
@@ -12,6 +13,8 @@ export function GameLoop() {
   const updateTimer = useGameStore(s => s.updateTimer)
   const botVoteCrack = useGameStore(s => s.botVoteCrack)
   const spawnPickup = useGameStore(s => s.spawnPickup)
+  const spawnWeaponCrate = useGameStore(s => s.spawnWeaponCrate)
+  const updateWeaponEffects = useGameStore(s => s.updateWeaponEffects)
   const nextArena = useGameStore(s => s.nextArena)
   const phase = useGameStore(s => s.phase)
   const eliminatedSlops = useGameStore(s => s.eliminatedSlops)
@@ -19,6 +22,7 @@ export function GameLoop() {
 
   const botVoteTimerRef = useRef(GRACE_PERIOD)
   const pickupTimerRef = useRef(5)
+  const weaponTimerRef = useRef(6)
   const fallTimerRef = useRef(0)
 
   useFrame((_, delta) => {
@@ -54,6 +58,16 @@ export function GameLoop() {
         spawnPickup()
         pickupTimerRef.current = PICKUP_SPAWN_INTERVAL
       }
+
+      // Spawn weapon crates
+      weaponTimerRef.current -= delta
+      if (weaponTimerRef.current <= 0) {
+        spawnWeaponCrate()
+        weaponTimerRef.current = WEAPON_SPAWN_INTERVAL
+      }
+
+      // Update weapon effects (move projectiles, decay lifetimes)
+      updateWeaponEffects(delta)
     }
 
     // Fall transition
